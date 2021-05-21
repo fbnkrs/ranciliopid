@@ -1,6 +1,6 @@
 /********************************************************
-  Version 2.4 (17.05.2021) 
-  Last Change: code cleanup
+  Version 2.5 (20.05.2021) 
+  Last Change: PINPRESSURESENSOR
   Values must be configured by the user
 ******************************************************/
 
@@ -41,7 +41,11 @@ MACHINE machine = RancilioSilvia;      //	RancilioSilvia, RancilioSilviaE, Gaggi
 // Offline mode
 #define OFFLINEMODUS 0             // 0 = Blynk and Wifi are used, 1 = offline mode (only preconfigured values in code are used!)
 #define FALLBACK 1                 // 1 = fallback to values stored in eeprom, 0 = deactivated
-#define GRAFANA 1                  // 1 = grafana visualisation (access required), 0 = off (default)
+
+// Visualisation
+#define GRAFANA 0                  // 1 = grafana visualisation on clevercoffee Server(access required), 2 = use other (local) influxDB and Grafana instances, 0 = off (default)
+#define INFLUXDB_HOST "XXX.XXX.XXX.XXX"   // Ip of local influxDB Server
+#define INFLUXDB_DBNAME "DATABASE_NAME"    // name of InfluxDB Database
 
 // PID & Hardware
 #define ONLYPID 1                  // 1 = Only PID, 0 = PID and preinfusion
@@ -127,7 +131,8 @@ MACHINE machine = RancilioSilvia;      //	RancilioSilvia, RancilioSilviaE, Gaggi
 
 // Pin Layout
 #define ONE_WIRE_BUS 2             // Temp sensor pin
-#define PINBREWSWITCH 0           // 0: A0 Analog PIN ; >0 : DIGITAL PIN, ESP8266: ONLY USE PIN15 AND PIN16! 
+#define PINBREWSWITCH 0            // 0: A0 (ESP8266) ; >0 : DIGITAL PIN, ESP32 OR ESP8266: ONLY USE PIN15 AND PIN16! 
+#define PINPRESSURESENSOR 99       // Pressuresensor 0: A0 (ESP8266), >0 ONLY ESP32 
 #define pinRelayVentil 12          // Output pin for 3-way-valve
 #define pinRelayPumpe 13           // Output pin for pump
 #define pinRelayHeater 14          // Output pin for heater
@@ -153,7 +158,7 @@ MACHINE machine = RancilioSilvia;      //	RancilioSilvia, RancilioSilviaE, Gaggi
 #endif
 
 // defined compiler errors
-#if (PRESSURESENSOR == 1) & (PINBREWSWITCH == 0)
+#if (PRESSURESENSOR == 1) && (PINPRESSURESENSOR == 0) && (PINBREWSWITCH == 0)
 #error Change PINBREWSWITCH or PRESSURESENSOR!
 #endif
 

@@ -25,7 +25,10 @@
 #include <PubSubClient.h>
 #include "TSIC.h"       //Library for TSIC temp sensor
 #include <Adafruit_VL53L0X.h> //for TOF 
-
+#if (GRAFANA == 2)
+#include <InfluxDb.h>
+Influxdb influx(INFLUXDB_HOST);
+#endif
 #if (BREWMODE == 2 || ONLYPIDSCALE == 1)
 #include <HX711_ADC.h>
 #endif
@@ -477,7 +480,7 @@ void checkPressure() {
   {
     previousMillisPressure = currentMillisPressure;
     
-    inputPressure = ((analogRead(analogPin) - offset) * maxPressure * 0.0689476) / (fullScale - offset);    // pressure conversion and unit conversion [psi] -> [bar]
+    inputPressure = ((analogRead(PINPRESSURESENSOR) - offset) * maxPressure * 0.0689476) / (fullScale - offset);    // pressure conversion and unit conversion [psi] -> [bar]
     inputPressureFilter = filter(inputPressure);
     DEBUG_print("pressure raw: ");
     DEBUG_println(inputPressure);
@@ -827,21 +830,37 @@ void sendToBlynk() {
       if (blynksendcounter == 5) {
         Blynk.virtualWrite(V36, heatrateaveragemin);
       }
-      if (grafana == 1 && blynksendcounter >= 6) {
-        Blynk.virtualWrite(V60, Input, Output, bPID.GetKp(), bPID.GetKi(), bPID.GetKd(), setPoint );
-         if (MQTT == 1)
-         {
-            mqtt_publish("HeaterPower", number2string(Output));
-            mqtt_publish("Kp", number2string(bPID.GetKp()));
-            mqtt_publish("Ki", number2string(bPID.GetKi()));
-            mqtt_publish("pidON", number2string(pidON));
-            mqtt_publish("brewtime", number2string(brewtime/1000));
-            mqtt_publish("preinfusionpause", number2string(preinfusionpause/1000));
-            mqtt_publish("preinfusion", number2string(preinfusion/1000));
-            mqtt_publish("SteamON", number2string(SteamON));
-         }
-        blynksendcounter = 0;
-      } else if (grafana == 0 && blynksendcounter >= 5) {
+      if (blynksendcounter >= 6) {
+        if (grafana == 1) {
+          Blynk.virtualWrite(V60, Input, Output, bPID.GetKp(), bPID.GetKi(), bPID.GetKd(), setPoint );
+        }
+        if (grafana == 2) {
+          // create dataset
+          InfluxData influx_clevercoffee("clevercoffee_PID");
+          influx_clevercoffee.addTag("Model", HOSTNAME);
+          influx_clevercoffee.addValue("HeaterPower", Output);
+          influx_clevercoffee.addValue("temperature", Input);
+          influx_clevercoffee.addValue("setPoint", setPoint);
+          influx_clevercoffee.addValue("SteamSetPoint", SteamSetPoint);
+          influx_clevercoffee.addValue("KP", bPID.GetKp());
+          influx_clevercoffee.addValue("KI", bPID.GetKi());
+          influx_clevercoffee.addValue("KD", bPID.GetKd());
+          influx_clevercoffee.addValue("PidON", pidON);
+          influx_clevercoffee.addValue("SteamON", SteamON);
+          // POST to influxDB
+          influx.write(influx_clevercoffee);
+        } 
+        if (MQTT == 1) {
+          mqtt_publish("HeaterPower", number2string(Output));
+          mqtt_publish("Kp", number2string(bPID.GetKp()));
+          mqtt_publish("Ki", number2string(bPID.GetKi()));
+          mqtt_publish("Kd", number2string(bPID.GetKd()));
+          mqtt_publish("pidON", number2string(pidON));
+          mqtt_publish("brewtime", number2string(brewtime/1000));
+          mqtt_publish("preinfusionpause", number2string(preinfusionpause/1000));
+          mqtt_publish("preinfusion", number2string(preinfusion/1000));
+          mqtt_publish("SteamON", number2string(SteamON));
+        }
         blynksendcounter = 0;
       }
       blynksendcounter++;
@@ -1540,14 +1559,19 @@ void machinestatevoid()
       {
         if(kaltstart) 
         {
-        machinestate = 10 ; // kaltstart 
+          machinestate = 10 ; // kaltstart 
         }
-        if(!kaltstart) 
+        else if(!kaltstart && (Input > (BrewSetPoint-10) )) // Input higher BrewSetPoint-10, normal PID
         {
-        machinestate = 20 ; // normal PID
+          machinestate = 20 ; // normal PID
+        } 
+        else if (Input <= (BrewSetPoint-10) )
+        {
+          machinestate = 10 ; // Input higher BrewSetPoint-10, kaltstart
+          kaltstart = true;
         }
       }
-      
+
       if(sensorError)
       {
         machinestate = 100 ;
@@ -1716,6 +1740,10 @@ void setup() {
       }
       delay(1000);
 
+      // set database name for local Grafana visualisation
+      if (grafana == 2){
+        influx.setDb(INFLUXDB_DBNAME);
+      }
       //try blynk connection
       Blynk.config(auth, blynkaddress, blynkport) ;
       Blynk.connect(30000);

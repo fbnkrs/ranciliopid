@@ -1,5 +1,5 @@
 /********************************************************
-   Version 2.9.2 (29.04.2021)  
+   Version 2.9.3 (03.07.2021)  
 ******************************************************/
 
 /********************************************************
@@ -80,8 +80,10 @@ const unsigned int maxWifiReconnects = MAXWIFIRECONNECTS;
 const unsigned long brewswitchDelay = BREWSWITCHDELAY;
 int BrewMode = BREWMODE ;
 int machinestate = 0;
+int machinestatecold = 0;
+unsigned long  machinestatecoldmillis = 0;
 int lastmachinestate = 0;
-
+int lastmachinestatepid = -1;
 
 //Display
 uint8_t oled_i2c = OLED_I2C;
@@ -168,7 +170,7 @@ int relayON, relayOFF;          // used for relay trigger type. Do not change!
 boolean kaltstart = true;       // true = Rancilio started for first time
 boolean emergencyStop = false;  // Notstop bei zu hoher Temperatur
 double EmergencyStopTemp = 120; // Temp EmergencyStopTemp
-const char* sysVersion PROGMEM  = "Version 2.9.2 MASTER";   //System version
+const char* sysVersion PROGMEM  = "Version 2.9.3 MASTER";   //System version
 int inX = 0, inY = 0, inOld = 0, inSum = 0; //used for filter()
 int bars = 0; //used for getSignalStrength()
 boolean brewDetected = 0;
@@ -606,7 +608,7 @@ void refreshTemp() {
     {
       previousMillistemp = currentMillistemp;
       sensors.requestTemperatures();
-      if (!checkSensor(sensors.getTempCByIndex(0)) && firstreading == 0) return;  //if sensor data is not valid, abort function; Sensor must be read at least one time at system startup
+      if (!checkSensor(sensors.getTempCByIndex(0)) && firstreading == 0 ) return;  //if sensor data is not valid, abort function; Sensor must be read at least one time at system startup
       Input = sensors.getTempCByIndex(0);
       if (Brewdetection != 0) {
         movAvg();
@@ -630,7 +632,7 @@ void refreshTemp() {
          #endif
        #if ((ONE_WIRE_BUS != 16 && defined(ESP8266)) || defined(ESP32))
         Temperatur_C = Sensor2.getTemp();
-        DEBUG_print(Temperatur_C);
+        //DEBUG_println(Temperatur_C);
        #endif
       //Temperatur_C = 70;
       if (!checkSensor(Temperatur_C) && firstreading == 0) return;  //if sensor data is not valid, abort function; Sensor must be read at least one time at system startup
@@ -1247,13 +1249,11 @@ void machinestatevoid()
   {
     // init
     case 0: 
-      if (Input < (BrewSetPoint-1) && millis() > 30*1000 ) // After 30 sec
-       {
-        machinestate = 10 ; // kaltstart
-      }
-      if (Input >= (BrewSetPoint-1) && millis() > 30*1000 ) // After 30 sec
+      if (Input < (BrewSetPoint-1) || Input < 150 ) // Prevent coldstart leave by Input 222
       {
-        machinestate = 19 ; // machine is hot, jump to other state
+        machinestate = 10 ; // kaltstart
+        DEBUG_println(Input);
+        DEBUG_println(machinestate);
       }
       
       if (pidON == 0)
@@ -1268,9 +1268,33 @@ void machinestatevoid()
 
      // kaltstart
     case 10: 
-      if (Input >= (BrewSetPoint-1) )
+      switch (machinestatecold) 
+      // one high Input let the state jump to 19. 
+      // switch (machinestatecold) prevent it, we wait 10 sec with new state. 
+      // during the 10 sec the Input has to be Input >= (BrewSetPoint-1),
+      // If not, reset machinestatecold
       {
-        machinestate = 19 ;
+        case 0:
+          if (Input >= (BrewSetPoint-1) && Input < 150 ) 
+          {
+            machinestatecoldmillis = millis(); // get millis for interval calc
+            machinestatecold = 10 ; // new state 
+            debugStream.writeV("Input >= (BrewSetPoint-1), wait 10 sec before machinestate 19");
+
+          }
+          break;
+        case 10: 
+          if (Input < (BrewSetPoint-1))
+          {
+            machinestatecold = 0 ;//  Input was only one time above BrewSetPoint, reset machinestatecold
+            debugStream.writeV("Reset timer for machinestate 19: Input < (BrewSetPoint-1)");
+          }
+          if (machinestatecoldmillis+10*1000 < millis() ) // 10 sec Input above BrewSetPoint, no set new state 
+          { 
+            machinestate = 19 ;
+            debugStream.writeV("10 sec Input >= (BrewSetPoint-1) finished, switch to state 19");
+          }
+          break;
       }
       if (SteamON == 1)
       {
@@ -1699,6 +1723,7 @@ void setup() {
   if (ETRIGGER == 1) // IF Etrigger selected 
   { 
     pinMode(PINETRIGGER, OUTPUT);
+    digitalWrite(PINETRIGGER, relayETriggerOFF);   //Set the E-Trigger OFF its, important for LOW Trigger Relais
   }
   if (BREWDETECTION == 3) // IF Voltage sensor selected 
   { 
@@ -1912,25 +1937,29 @@ void setup() {
   /********************************************************
      TEMP SENSOR
   ******************************************************/
-  if (TempSensor == 1) {
+  if (TempSensor == 1) 
+  {
     sensors.begin();
     sensors.getAddress(sensorDeviceAddress, 0);
     sensors.setResolution(sensorDeviceAddress, 10) ;
     sensors.requestTemperatures();
     Input = sensors.getTempCByIndex(0);
   }
-
-  if (TempSensor == 2) {
+  if (TempSensor == 2) 
+  {
     temperature = 0;
     #if (ONE_WIRE_BUS == 16 && defined(ESP8266))
-         Sensor1.getTemperature(&temperature);
-         Input = Sensor1.calc_Celsius(&temperature);
+        Sensor1.getTemperature(&temperature);
+        Input = Sensor1.calc_Celsius(&temperature);
     #endif
     #if ((ONE_WIRE_BUS != 16 && defined(ESP8266)) || defined(ESP32))
         Input = Sensor2.getTemp();
-     #endif
+    #endif
   }
-
+       
+      
+  
+  
   /********************************************************
     movingaverage ini array
   ******************************************************/
@@ -1995,8 +2024,8 @@ void setup() {
     timerAlarmWrite(timer, 10000, true);//m
     timerAlarmEnable(timer);//m
   #endif
-  
 }
+
 void loop() {
   if (calibration_mode == 1 && TOF == 1) {
       loopcalibrate();
@@ -2188,6 +2217,11 @@ void looppid()
     } else {
       startKi = 0 ;
     }
+    if (lastmachinestatepid != machinestate)
+    {
+      debugStream.writeI("new PID-Values: P=%.1f  I=%.1f  D=%.1f",startKp,startKi,0);
+      lastmachinestatepid = machinestate;
+    }
     bPID.SetTunings(startKp, startKi, 0, P_ON_M);
   // normal PID
   } 
@@ -2200,6 +2234,11 @@ void looppid()
       aggKi = 0 ;
     }
     aggKd = aggTv * aggKp ;
+    if (lastmachinestatepid != machinestate)
+    {
+      debugStream.writeI("new PID-Values: P=%.1f  I=%.1f  D=%.1f",aggKp,aggKi,aggKd);
+      lastmachinestatepid = machinestate;
+    }
     bPID.SetTunings(aggKp, aggKi, aggKd, PonE);
     kaltstart = false;
   }
@@ -2213,6 +2252,11 @@ void looppid()
       aggbKi = 0 ;
     }
     aggbKd = aggbTv * aggbKp ;
+    if (lastmachinestatepid != machinestate)
+    {
+      debugStream.writeI("new PID-Values: P=%.1f  I=%.1f  D=%.1f",aggbKp,aggbKi,aggbKd);
+      lastmachinestatepid = machinestate;
+    }
     bPID.SetTunings(aggbKp, aggbKi, aggbKd, PonE) ;
   }
   // Steam on
@@ -2225,6 +2269,11 @@ void looppid()
     // }
     // aggKi = 0 ;
     // aggKd = aggTv * aggKp ;
+    if (lastmachinestatepid != machinestate)
+    {
+      debugStream.writeI("new PID-Values: P=%.1f  I=%.1f  D=%.1f",150,0,0);
+      lastmachinestatepid = machinestate;
+    }
     bPID.SetTunings(150, 0, 0, PonE);
   }
 
@@ -2248,6 +2297,11 @@ void looppid()
         aggbKd = aggbTv * aggbKp;
     }
 
+    if (lastmachinestatepid != machinestate)
+    {
+      debugStream.writeI("new PID-Values: P=%.1f  I=%.1f  D=%.1f",aggbKp,aggbKi,aggbKd);
+      lastmachinestatepid = machinestate;
+    }
     bPID.SetTunings(aggbKp, aggbKi, aggbKd, PonE) ;
   }  
   //sensor error OR Emergency Stop

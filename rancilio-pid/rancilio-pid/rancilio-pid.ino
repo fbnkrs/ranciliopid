@@ -26,8 +26,11 @@
 #include "TSIC.h"       //Library for TSIC temp sensor
 #include <Adafruit_VL53L0X.h> //for TOF 
 #if (GRAFANA == 2)
-#include <InfluxDb.h>
-Influxdb influx(INFLUXDB_HOST);
+  #include <InfluxDb.h>
+  #include <InfluxDbClient.h>
+  // set database name for local Grafana visualisation
+  InfluxDBClient client(INFLUXDB_URL, INFLUXDB_DB_NAME);
+  Point influx_clevercoffee("clevercoffee_PID");
 #endif
 #if (BREWMODE == 2 || ONLYPIDSCALE == 1)
 #include <HX711_ADC.h>
@@ -847,23 +850,8 @@ void sendToBlynk() {
         if (grafana == 1) {
           Blynk.virtualWrite(V60, Input, Output, bPID.GetKp(), bPID.GetKi(), bPID.GetKd(), setPoint );
         }
-        if (grafana == 2) {
-          // create dataset
-          InfluxData influx_clevercoffee("clevercoffee_PID");
-          influx_clevercoffee.addTag("Model", HOSTNAME);
-          influx_clevercoffee.addValue("HeaterPower", Output);
-          influx_clevercoffee.addValue("temperature", Input);
-          influx_clevercoffee.addValue("setPoint", setPoint);
-          influx_clevercoffee.addValue("SteamSetPoint", SteamSetPoint);
-          influx_clevercoffee.addValue("KP", bPID.GetKp());
-          influx_clevercoffee.addValue("KI", bPID.GetKi());
-          influx_clevercoffee.addValue("KD", bPID.GetKd());
-          influx_clevercoffee.addValue("PidON", pidON);
-          influx_clevercoffee.addValue("SteamON", SteamON);
-          // POST to influxDB
-          influx.write(influx_clevercoffee);
-        } 
-        if (MQTT == 1) {
+      sendToInflux();
+      if (MQTT == 1) {
           mqtt_publish("HeaterPower", number2string(Output));
           mqtt_publish("Kp", number2string(bPID.GetKp()));
           mqtt_publish("Ki", number2string(bPID.GetKi()));
@@ -879,6 +867,40 @@ void sendToBlynk() {
       blynksendcounter++;
     }
   }
+}
+
+
+/********************************************************
+  send data to InfluxDB server
+*****************************************************/
+
+void sendToInflux() {
+  if (Offlinemodus == 1) return;
+
+  if (grafana == 2) {
+    // create dataset
+    influx_clevercoffee.clearFields();
+    influx_clevercoffee.clearTags();
+    influx_clevercoffee.addTag("Model", HOSTNAME);
+    influx_clevercoffee.addField("HeaterPower", Output);
+    influx_clevercoffee.addField("temperature", Input);
+    influx_clevercoffee.addField("setPoint", setPoint);
+    influx_clevercoffee.addField("SteamSetPoint", SteamSetPoint);
+    influx_clevercoffee.addField("KP", bPID.GetKp());
+    influx_clevercoffee.addField("KI", bPID.GetKi());
+    influx_clevercoffee.addField("KD", bPID.GetKd());
+    influx_clevercoffee.addField("PidON", pidON);
+    influx_clevercoffee.addField("SteamON", SteamON);
+    // POST to influxDB
+    
+    if (!client.writePoint(influx_clevercoffee)){
+      int strlen = client.getLastErrorMessage().length() +1;
+      char error[strlen];
+      client.getLastErrorMessage().toCharArray(error, strlen);
+      debugStream.writeE("influx error:");
+      debugStream.writeE(error);
+    }
+  }   
 }
 
 /********************************************************
@@ -1822,9 +1844,22 @@ void setup() {
       }
       delay(1000);
 
-      // set database name for local Grafana visualisation
-      if (grafana == 2){
-        influx.setDb(INFLUXDB_DBNAME);
+      //try influx connection
+      if (GRAFANA == 2){
+        if (INFLUXDB_AUTH_NEEDED == 1){
+          client.setConnectionParamsV1(INFLUXDB_URL, INFLUXDB_DB_NAME, INFLUXDB_USER, INFLUXDB_PASS);
+        }
+        if (client.validateConnection()) {
+          int strlen = client.getServerUrl().length() +1;
+          char info[strlen];
+          debugStream.writeI("SETUP INFO: Influx connected");
+          debugStream.writeI(info);
+        }else{
+          int strlen = client.getLastErrorMessage().length() +1;
+          char error[strlen];
+          debugStream.writeE("SETUP ERROR: Influx not connected");
+          debugStream.writeE(error);
+        }
       }
       //try blynk connection
       Blynk.config(auth, blynkaddress, blynkport) ;

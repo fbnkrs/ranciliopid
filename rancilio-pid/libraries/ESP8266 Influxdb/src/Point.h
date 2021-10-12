@@ -29,6 +29,7 @@
 
 #include <Arduino.h>
 #include "WritePrecision.h"
+#include "util/helpers.h"
 
 /**
  * Class Point represents InfluxDB point in line protocol.
@@ -49,7 +50,7 @@ friend class InfluxDBClient;
     void addField(String name, unsigned int value)  { putField(name, String(value)+"i"); }
     void addField(String name, long value)          { putField(name, String(value)+"i"); }
     void addField(String name, unsigned long value) { putField(name, String(value)+"i"); }
-    void addField(String name, bool value)          { putField(name,value?"true":"false"); }
+    void addField(String name, bool value)          { putField(name, bool2string(value)); }
     void addField(String name, String value)        { addField(name, value.c_str()); }
     void addField(String name, const char *value);
     // Set timestamp to `now()` and store it in specified precision, nanoseconds by default. Date and time must be already set. See `configTime` in the device API
@@ -69,7 +70,7 @@ friend class InfluxDBClient;
     // True if a point contains timestamp
     bool hasTime() const   { return _timestamp.length() > 0; }
     // Creates line protocol with optionally added tags
-    String toLineProtocol(String includeTags = "") const __attribute__ ((deprecated("Use InfluxDBClient::pointToLineProtocol()")));
+    String toLineProtocol(String includeTags = "") const;
     // returns current timestamp
     String getTime() const { return _timestamp; } 
   protected:

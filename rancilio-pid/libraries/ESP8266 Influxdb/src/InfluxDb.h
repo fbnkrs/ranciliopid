@@ -1,10 +1,10 @@
 /**
  * 
- * TestSupport.h: Supporting functions for tests
+ * InfluxDb.h: InfluxDB Client for Arduino
  * 
  * MIT License
  * 
- * Copyright (c) 2020 InfluxData
+ * Copyright (c) 2018-2020 Tobias Schürg
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,36 +24,36 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
 */
+#ifndef _INFLUXDB_H_
+#define _INFLUXDB_H
 
-#ifndef _TEST_SUPPORT_H_
-#define _TEST_SUPPORT_H_
+#include "InfluxData.h"
 
-#include "query/FluxParser.h"
+class Influxdb : public InfluxDBClient {
+ public:
+  Influxdb(String host, uint16_t port = 8086);
 
-void printFreeHeap();
+  void setDb(String db);
+  void setDbAuth(String db, String user, String pass);
 
-int httpPOST(String url, String mess);
+  void setVersion(uint16_t version);
+  void setBucket(String bucket);
+  void setOrg(String org);
+  void setToken(String token);
+  void setPort(uint16_t port);
+#if defined(ESP8266)
+  void setFingerPrint(const char *fingerPrint);
+#endif
 
-int httpGET(String url);
+  void prepare(InfluxData data);
+  boolean write();
 
-bool deleteAll(String url) ;
+  boolean write(InfluxData data);
+  boolean write(String data);
 
-bool serverLog(String url, String mess);
-
-bool isServerUp(String url);
-
-
-int countParts(String &str, char separator);
-
-String *getParts(String &str, char separator, int &count);
-
-int countLines(FluxQueryResult flux) ;
-
-std::vector<String> getLines(FluxQueryResult flux);
-
-
-bool compareTm(tm &tm1, tm &tm2);
-// Waits for server in desired state (up - true, down - false)
-bool waitServer(const char *url, bool state);
-
-#endif //_TEST_SUPPORT_H_
+ private:
+  uint16_t _preparedPoints;
+  
+  void begin();
+};
+#endif

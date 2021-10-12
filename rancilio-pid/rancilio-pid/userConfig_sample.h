@@ -42,9 +42,12 @@ enum MACHINE {
 #define FALLBACK 1                 // 1 = fallback to values stored in eeprom, 0 = deactivated
 
 // Visualisation
-#define GRAFANA 0                  // 1 = grafana visualisation on clevercoffee Server(access required), 2 = use other (local) influxDB and Grafana instances, 0 = off (default)
-#define INFLUXDB_HOST "XXX.XXX.XXX.XXX"   // Ip of local influxDB Server
-#define INFLUXDB_DBNAME "DATABASE_NAME"    // name of InfluxDB Database
+#define GRAFANA 0                            // 1 = grafana visualisation on clevercoffee Server(access required), 2 = use other (local) influxDB and Grafana instances, 0 = off (default)
+#define INFLUXDB_URL "http://yourURL:8086"   // URL of local influxDB Server
+#define INFLUXDB_DB_NAME "DATABASE_NAME"     // name of InfluxDB Database
+#define INFLUXDB_AUTH_NEEDED 0               // 0 = no Authentication needed, 1 = use authentication
+#define INFLUXDB_USER "username"             // username (if databse needs auth)
+#define INFLUXDB_PASS "passwd"               // password
 
 // PID & Hardware
 #define ONLYPID 1                  // 1 = Only PID, 0 = PID and preinfusion
@@ -54,6 +57,8 @@ enum MACHINE {
 #define BREWSWITCHTYPE 1              //  1 = normal Switch, 2 = Trigger Switch
 #define COLDSTART_PID 1            // 1 = default coldstart values, 2 = custom values via blynk (expert mode activated) 
 #define TRIGGERTYPE HIGH           // LOW = low trigger, HIGH = high trigger relay // BREWDETECTION 3 configuration
+
+// BREWDETECTION 3 configuration
 #define VOLTAGESENSORTYPE HIGH 
 #define PINMODEVOLTAGESENSOR INPUT // Mode INPUT_PULLUP, INPUT or INPUT_PULLDOWN_16 (Only Pin 16)
 #define PRESSURESENSOR 0           // 1 = pressure sensor connected to A0; PINBREWSWITCH must be set to the connected input!

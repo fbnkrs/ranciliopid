@@ -817,7 +817,6 @@ void sendToBlynk() {
   if (Offlinemodus == 1) return;
 
   unsigned long currentMillisBlynk = millis();
-  unsigned long currentMillistemp = 0;
 
   if (currentMillisBlynk - previousMillisBlynk >= intervalBlynk) {
 
@@ -897,8 +896,7 @@ void sendToInflux() {
       int strlen = client.getLastErrorMessage().length() +1;
       char error[strlen];
       client.getLastErrorMessage().toCharArray(error, strlen);
-      debugStream.writeE("influx error:");
-      debugStream.writeE(error);
+      debugStream.writeE("influx error: %s", error);
     }
   }   
 }
@@ -1852,13 +1850,11 @@ void setup() {
         if (client.validateConnection()) {
           int strlen = client.getServerUrl().length() +1;
           char info[strlen];
-          debugStream.writeI("SETUP INFO: Influx connected");
-          debugStream.writeI(info);
+          debugStream.writeI("SETUP INFO: Influx connected %s", info);
         }else{
           int strlen = client.getLastErrorMessage().length() +1;
           char error[strlen];
-          debugStream.writeE("SETUP ERROR: Influx not connected");
-          debugStream.writeE(error);
+          debugStream.writeE("SETUP ERROR: Influx not connected %s", error);
         }
       }
       //try blynk connection

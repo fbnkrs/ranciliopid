@@ -1,6 +1,10 @@
 /********************************************************
-   Version 2.9.3 (03.07.2021)  
+   Version 2.9.4 (10.01.2022)     
 ******************************************************/
+
+// SYSVERSION and SYSVERSION_INO need to match, checked by preprocessor
+#define  SYSVERSION_INO '2.9.4 MASTER'
+#define  SYSVERSION_DISPLAY "Version 2.9.4 MASTER"  // Displayed during startup
 
 /********************************************************
   INCLUDES
@@ -37,6 +41,13 @@
 #endif
 
 /********************************************************
+  Version of userConfig and rancilio-pid.ino need to match
+******************************************************/
+#if !defined(SYSVERSION) || !defined(SYSVERSION_INO)  || (SYSVERSION != SYSVERSION_INO)
+  #error Version of userConfig file and rancilio-pid.ino need to match!
+#endif
+
+/********************************************************
   DEFINES
 ******************************************************/
 MACHINE machine = (enum MACHINE) MACHINEID;
@@ -64,6 +75,30 @@ DebugStreamManager debugStream;
 PeriodicTrigger writeDebugTrigger(5000); // trigger alle 5000 ms
 PeriodicTrigger logbrew(500);
 
+/********************************************************
+  Machine State
+******************************************************/
+
+enum MachineState {
+    kInit = 0,
+    kColdStart = 10,
+    kSetPointNegative = 19,
+    kPidNormal = 20,
+    kBrew = 30,
+    kShotTimerAfterBrew = 31,
+    kBrewDetectionTrailing = 35,
+    kSteam = 40,
+    kCoolDown = 45,
+    kBackflush = 50,
+    kEmergencyStop = 80,
+    kPidOffline = 90,
+    kSensorError = 100,
+};
+MachineState machinestate = kInit;
+int machinestatecold = 0;
+unsigned long  machinestatecoldmillis = 0;
+MachineState lastmachinestate = kInit;
+int lastmachinestatepid = -1;
 
 /********************************************************
   definitions below must be changed in the userConfig.h file
@@ -81,12 +116,8 @@ const unsigned long wifiConnectionDelay = WIFICINNECTIONDELAY;
 const unsigned int maxWifiReconnects = MAXWIFIRECONNECTS;
 //int machineLogo = MACHINELOGO;
 const unsigned long brewswitchDelay = BREWSWITCHDELAY;
-int BrewMode = BREWMODE ;
-int machinestate = 0;
-int machinestatecold = 0;
-unsigned long  machinestatecoldmillis = 0;
-int lastmachinestate = 0;
-int lastmachinestatepid = -1;
+int BrewMode = BREWMODE;
+const char* sysVersion PROGMEM  = SYSVERSION_DISPLAY; //System version
 
 //Display
 uint8_t oled_i2c = OLED_I2C;
@@ -173,7 +204,6 @@ int relayON, relayOFF;          // used for relay trigger type. Do not change!
 boolean kaltstart = true;       // true = Rancilio started for first time
 boolean emergencyStop = false;  // Notstop bei zu hoher Temperatur
 double EmergencyStopTemp = 120; // Temp EmergencyStopTemp
-const char* sysVersion PROGMEM  = "Version 2.9.3 MASTER";   //System version
 int inX = 0, inY = 0, inOld = 0, inSum = 0; //used for filter()
 int bars = 0; //used for getSignalStrength()
 boolean brewDetected = 0;
@@ -181,6 +211,13 @@ boolean setupDone = false;
 int backflushON = 0;            // 1 = activate backflush
 int flushCycles = 0;            // number of active flush cycles
 int backflushState = 10;        // counter for state machine
+static const char *machineName[] PROGMEM =
+{
+  "Rancilio Silvia",
+  "Rancilio Silvia E",
+  "Gaggia",
+  "QuickMill",
+};
 
 /********************************************************
    moving average - brewdetection
@@ -212,7 +249,7 @@ double aggbKi = aggbKp / aggbTn;
 #endif
 double aggbKd = aggbTv * aggbKp ;
 double brewtimersoftware = 45;    // 20-5 for detection
-double brewboarder = 150 ;        // border for the detection, be carefull: to low: risk of wrong brew detection and rising temperature
+double brewboarder = BREWDETECTIONLIMIT;  // brew detection limit
 const int PonE = PONE;
 
 /********************************************************
@@ -310,11 +347,11 @@ void getSignalStrength() {
 
   if (rssi >= -50) {
     bars = 4;
-  } else if (rssi < -50 & rssi >= -65) {
+  } else if (rssi < -50 && rssi >= -65) {
     bars = 3;
-  } else if (rssi < -65 & rssi >= -75) {
+  } else if (rssi < -65 && rssi >= -75) {
     bars = 2;
-  } else if (rssi < -75 & rssi >= -80) {
+  } else if (rssi < -75 && rssi >= -80) {
     bars = 1;
   } else {
     bars = 0;
@@ -385,13 +422,6 @@ BLYNK_WRITE(V6) {
 }
 
 BLYNK_WRITE(V7) {
-  if (machinestate == 10) //antiwindup by coldstart 
-  {
-    bPID.SetOutputLimits(0.0, 1.0);  // Forces minimum up to 0.0
-    bPID.SetOutputLimits(-1.0, 0.0);  // Forces maximum down to 0.0
-    bPID.Compute() ;
-    bPID.SetOutputLimits(0, windowSize); // reset window
-  }
   BrewSetPoint = param.asDouble();
   mqtt_publish("BrewSetPoint", number2string(BrewSetPoint));
 }
@@ -668,32 +698,14 @@ void initOfflineMode()
   debugStream.writeI("Start offline mode with eeprom values, no wifi:(");
   Offlinemodus = 1 ;
 
-  EEPROM.begin(1024);  // open eeprom
-  double dummy; // check if eeprom values are numeric (only check first value in eeprom)
-  EEPROM.get(0, dummy);
-  debugStream.writeI("check eeprom 0x00 in dummy: %f",dummy);
-  if (!isnan(dummy)) {
-    EEPROM.get(0, aggKp);
-    EEPROM.get(10, aggTn);
-    EEPROM.get(20, aggTv);
-    EEPROM.get(30, BrewSetPoint);
-    EEPROM.get(40, brewtime);
-    EEPROM.get(50, preinfusion);
-    EEPROM.get(60, preinfusionpause);
-    EEPROM.get(90, aggbKp);
-    EEPROM.get(100, aggbTn);
-    EEPROM.get(110, aggbTv);
-    EEPROM.get(120, brewtimersoftware);
-    EEPROM.get(130, brewboarder);
-  } else {
+  if (readSysParamsFromStorage() != 0)
+  {
     #if DISPLAY != 0
-      displayMessage("", "", "", "", "No eeprom,", "Values");
-     #endif
+    displayMessage("", "", "", "", "No eeprom,", "Values");
+    #endif
     debugStream.writeI("No working eeprom value, I am sorry, but use default offline value  :)");
     delay(1000);
   }
-  // eeeprom schließen
-  EEPROM.commit();
 }
 
 /*******************************************************
@@ -801,13 +813,16 @@ char* number2string(unsigned int in) {
 /*******************************************************
    Publish Data to MQTT
 *****************************************************/
-bool mqtt_publish(char* reading, char* payload) {
-  if (MQTT == 1){
+bool mqtt_publish(const char *reading, char *payload)
+{
+#if MQTT
     char topic[120];
     snprintf(topic, 120, "%s%s/%s", mqtt_topic_prefix, hostname, reading);
-    mqtt.publish(topic,payload,true);
-  }
-  }
+    return mqtt.publish(topic, payload, true);
+#else
+    return false;
+#endif
+}
 
 /********************************************************
   send data to Blynk server
@@ -1070,7 +1085,7 @@ int filter(int input) {
 
 
 void mqtt_callback(char* topic, byte* data, unsigned int length) {
-  char topic_str[255];
+  char topic_str[256];
   os_memcpy(topic_str, topic, sizeof(topic_str));
   topic_str[255] = '\0';
   char data_str[length+1];
@@ -1080,9 +1095,6 @@ void mqtt_callback(char* topic, byte* data, unsigned int length) {
   char configVar[120];
   char cmd[64];
   double data_double;
-  int data_int;
-
-
 
  // DEBUG_print("mqtt_parse(%s, %s)\n", topic_str, data_str);
   snprintf(topic_pattern, sizeof(topic_pattern), "%s%s/%%[^\\/]/%%[^\\/]", mqtt_topic_prefix, hostname);
@@ -1201,7 +1213,7 @@ void checkSteamON()
 
 void setEmergencyStopTemp()
 {
-  if (machinestate == 40 || machinestate == 45) 
+  if (machinestate == kSteam || machinestate == kCoolDown) 
   {
     if (EmergencyStopTemp != 145)
     EmergencyStopTemp = 145;  
@@ -1248,46 +1260,31 @@ boolean checkSteamOffQM()
    machinestatevoid
 ******************************************************/
 
-
 void machinestatevoid() 
 {
-  /* 
-  00 = init
-  10 = kaltstart
-  19 = Setpoint -1 Celsius
-  20 = Setpoint überschritten, idle at setpoint
-  30 = Bezug 
-  35 = Nachlauf BD
-  40 = Dampf
-  50 = Backflush
-  80 = Emergency Stop
-  90 = PID Offline
-  100 = Sensorerror
-  */
   //DEBUG_println(machinestate);
   switch (machinestate) 
   {
     // init
-    case 0: 
+    case kInit: 
       if (Input < (BrewSetPoint-1) || Input < 150 ) // Prevent coldstart leave by Input 222
       {
-        machinestate = 10 ; // kaltstart
+        machinestate = kColdStart;
         DEBUG_println(Input);
         DEBUG_println(machinestate);
       }
       
       if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;
 
-     // kaltstart
-    case 10: 
+    case kColdStart: 
       switch (machinestatecold) 
       // one high Input let the state jump to 19. 
       // switch (machinestatecold) prevent it, we wait 10 sec with new state. 
@@ -1311,14 +1308,14 @@ void machinestatevoid()
           }
           if (machinestatecoldmillis+10*1000 < millis() ) // 10 sec Input above BrewSetPoint, no set new state 
           { 
-            machinestate = 19 ;
+            machinestate = kSetPointNegative ;
             debugStream.writeV("10 sec Input >= (BrewSetPoint-1) finished, switch to state 19");
           }
           break;
       }
       if (SteamON == 1)
       {
-        machinestate = 40 ; // Steam
+        machinestate = kSteam;
       }
 
       if
@@ -1328,32 +1325,33 @@ void machinestatevoid()
       )
       
       {
-        machinestate = 30 ; // Brew
+        machinestate = kBrew;
       }
 
       if (SteamON == 1)
       {
-        machinestate = 40 ; // switch to  Steam
+        machinestate = kSteam;
       }
 
       if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
 
      if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
+      break;
       // Setpoint -1 Celsius
-      case 19: 
+      case kSetPointNegative: 
       if (Input >= (BrewSetPoint))
       {
-        machinestate = 20 ;
+        machinestate = kPidNormal;
       }
       if
       (
@@ -1361,34 +1359,34 @@ void machinestatevoid()
        (ONLYPID == 0 && brewcounter > 10 && brewcounter <= 42) 
       )
       {
-        machinestate = 30 ; // Brew
+        machinestate = kBrew;
       }
       if (SteamON == 1)
       {
-        machinestate = 40 ; // Steam
+        machinestate = kSteam;
       }
 
       if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
 
       if (SteamON == 1)
       {
-        machinestate = 40 ; // switch to  Steam
+        machinestate = kSteam;
       }
     
      if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }  
     break;
-    // normal PID
-    case 20: 
+
+    case kPidNormal: 
       brewdetection();  //if brew detected, set PID values
       if
       (
@@ -1396,32 +1394,32 @@ void machinestatevoid()
        (ONLYPID == 0 && brewcounter > 10 && brewcounter <= 42) 
       )
       {
-        machinestate = 30 ; // Brew
+        machinestate = kBrew;
       }
       if (SteamON == 1)
       {
-        machinestate = 40 ; // Steam
+        machinestate = kSteam;
       }
 
       if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
       if (emergencyStop)
       {
-        machinestate = 80 ; // Emergency Stop
+        machinestate = kEmergencyStop;
       }
      if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;
-     // Brew
-    case 30:
+
+    case kBrew:
       brewdetection();  
       // Ausgabe waehrend des Bezugs von Bruehzeit, Temp und heatrateaverage
       if (logbrew.check())
@@ -1435,74 +1433,74 @@ void machinestatevoid()
       {
        if ((ONLYPID == 1 && Brewdetection == 3) || ONLYPID == 0 ) // only delay of shotimer for voltagesensor or brewcounter
        {
-         machinestate = 31 ;
+         machinestate = kShotTimerAfterBrew ;
          lastbezugszeitMillis = millis() ; // for delay
         
        }
        if (ONLYPID == 1 && Brewdetection == 1 && timerBrewdetection == 1) //direct to PID BD
        {
-         machinestate = 35 ;
+         machinestate = kBrewDetectionTrailing ;
        }
       } 
       if (SteamON == 1)
       {
-        machinestate = 40 ; // Steam
+        machinestate = kSteam;
       }
 
       if (emergencyStop)
       {
-        machinestate = 80 ; // Emergency Stop
+        machinestate = kEmergencyStop;
       }
      if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;
-    // Sec after shot finish
-    case 31: //lastbezugszeitMillis
+
+    case kShotTimerAfterBrew: //lastbezugszeitMillis
     brewdetection();  
       if ( millis()-lastbezugszeitMillis > BREWSWITCHDELAY )
       {
        debugStream.writeI("Bezugsdauer: %4.1f s",lastbezugszeit/1000);
-       machinestate = 35 ;
+       machinestate = kBrewDetectionTrailing ;
        lastbezugszeit = 0 ;
       }
 
       if (SteamON == 1)
       {
-        machinestate = 40 ; // Steam
+        machinestate = kSteam;
       }
 
      if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
 
       if (emergencyStop)
       {
-        machinestate = 80 ; // Emergency Stop
+        machinestate = kEmergencyStop;
       }
 
      if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
 
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;
-    // BD PID
-    case 35:
-    brewdetection();  
+
+    case kBrewDetectionTrailing:
+      brewdetection();
       if (timerBrewdetection == 0)
       {
-        machinestate = 20 ; // switch to normal PID
+        machinestate = kPidNormal;
       }
       if
       (
@@ -1510,60 +1508,60 @@ void machinestatevoid()
        (ONLYPID == 0 && brewcounter > 10 && brewcounter <= 42) 
       )
       {
-        machinestate = 30 ; // Brew
+        machinestate = kBrew;
       }
       
       if (SteamON == 1)
       {
-        machinestate = 40 ; // switch to  Steam
+        machinestate = kSteam;
       }
 
       if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
 
       if (emergencyStop)
       {
-        machinestate = 80 ; // Emergency Stop
+        machinestate = kEmergencyStop;
       }
       if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
      if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;
-    // Steam
-    case 40:
+
+    case kSteam:
       if (SteamON == 0)
       {
-        machinestate = 45 ; //  switch to cool down after steam
+        machinestate = kCoolDown;
       }
 
        if (emergencyStop)
       {
-        machinestate = 80 ; // Emergency Stop
+        machinestate = kEmergencyStop;
       }
 
       if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
 
       if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
       if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;  
 
-    case 45: // chill-mode after steam
+    case kCoolDown:
     if (Brewdetection == 2 || Brewdetection == 3) 
       {
         /*
@@ -1577,104 +1575,104 @@ void machinestatevoid()
         // Ab lokalen Minumum wieder freigeben für state 20, dann wird bist Solltemp geheizt.
          if (heatrateaverage > 0 && Input < BrewSetPoint + 2) 
          {
-            machinestate = 20;
+            machinestate = kPidNormal;
          } 
       }
       if ((Brewdetection == 3 || Brewdetection == 2) && Input < BrewSetPoint + 2) 
       {
-        machinestate = 20; //  switch to normal
+        machinestate = kPidNormal;
       }
 
       if (SteamON == 1)
       {
-        machinestate = 40 ; // Steam
+        machinestate = kSteam;
       }
 
       if (backflushON || backflushState > 10) 
       {
-        machinestate = 50 ; // backflushON
+        machinestate = kBackflush;
       }
 
       if (emergencyStop)
       {
-        machinestate = 80 ; // Emergency Stop
+        machinestate = kEmergencyStop;
       }
       if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
       if(sensorError)
       {
-        machinestate = 100 ;// sensorerror
+        machinestate = kSensorError;
       }
     break;
 
-    case 50: 
-    // Backflush
+    case kBackflush:
       if (backflushON == 0)
        {
-         machinestate = 20 ; //  switch to normal
+         machinestate = kPidNormal;
        }
 
       if (emergencyStop)
        {
-         machinestate = 80 ; // Emergency Stop
+         machinestate = kEmergencyStop;
        }
       if (pidON == 0)
        {
-         machinestate = 90 ; // offline
+         machinestate = kPidOffline;
        }
       if(sensorError)
        {
-         machinestate = 100 ;// sensorerror
+         machinestate = kSensorError;
        }
     break;
-    // emergencyStop 
-    case 80: 
+
+    case kEmergencyStop: 
       if (!emergencyStop)
       {
-        machinestate = 20 ; // normal PID
+        machinestate = kPidNormal;
       }
       if (pidON == 0)
       {
-        machinestate = 90 ; // offline
+        machinestate = kPidOffline;
       }
       if(sensorError)
       {
-        machinestate = 100 ;
+        machinestate = kSensorError ;
       }
     break;
-    // PID offline
-    case 90: 
+
+    case kPidOffline: 
       if (pidON == 1)
       {
         if(kaltstart) 
         {
-          machinestate = 10 ; // kaltstart 
+          machinestate = kColdStart;
         }
         else if(!kaltstart && (Input > (BrewSetPoint-10) )) // Input higher BrewSetPoint-10, normal PID
         {
-          machinestate = 20 ; // normal PID
+          machinestate = kPidNormal;
         } 
         else if (Input <= (BrewSetPoint-10) )
         {
-          machinestate = 10 ; // Input higher BrewSetPoint-10, kaltstart
+          machinestate = kColdStart; // Input 10C below set point, enter cold start
           kaltstart = true;
         }
       }
 
       if(sensorError)
       {
-        machinestate = 100 ;
+        machinestate = kSensorError ;
       }
     break;
-    // sensor error
-    case 100:
-      machinestate = 100 ;
+
+    case kSensorError:
+      machinestate = kSensorError ;
     break;
   } // switch case
+
   if (machinestate != lastmachinestate) { 
-    debugStream.writeI("new machinestate: %i -> %i",lastmachinestate, machinestate);
+    debugStream.writeI("new machinestate: %i -> %i", lastmachinestate, machinestate);
     lastmachinestate = machinestate;
   }
 } // end void
@@ -1691,6 +1689,8 @@ void debugVerboseOutput()
 void setup() {
   DEBUGSTART(115200);
   debugStream.setup();
+
+  EEPROM.begin(1024);
 
   if (MQTT == 1) {
     //MQTT
@@ -1890,47 +1890,16 @@ void setup() {
           Blynk.syncVirtual(V34);
           // Blynk.syncAll();  //sync all values from Blynk server
           // Werte in den eeprom schreiben
-          // ini eeprom mit begin
-          EEPROM.begin(1024);
-          EEPROM.put(0, aggKp);
-          EEPROM.put(10, aggTn);
-          EEPROM.put(20, aggTv);  
-          EEPROM.put(30, BrewSetPoint);
-          EEPROM.put(40, brewtime);
-          EEPROM.put(50, preinfusion);
-          EEPROM.put(60, preinfusionpause);
-          EEPROM.put(90, aggbKp);
-          EEPROM.put(100, aggbTn);
-          EEPROM.put(110, aggbTv);
-          EEPROM.put(120, brewtimersoftware);
-          EEPROM.put(130, brewboarder);
-          // eeprom schließen
-          EEPROM.commit();
+          writeSysParamsToStorage();
         }
       } else 
       {
         debugStream.writeI("No connection to Blynk");
-        EEPROM.begin(1024);  // open eeprom
-        double dummy; // check if eeprom values are numeric (only check first value in eeprom)
-        EEPROM.get(0, dummy);
-        debugStream.writeI("check eeprom 0x00 in dummy: %f",dummy);
-        if (!isnan(dummy)) 
+        if (readSysParamsFromStorage() == 0)
         {
           #if DISPLAY != 0
-           displayLogo("3: Blynk not connected", "use eeprom values..");
+          displayLogo("3: Blynk not connected", "use eeprom values..");
           #endif 
-          EEPROM.get(0, aggKp);
-          EEPROM.get(10, aggTn);
-          EEPROM.get(20, aggTv);
-          EEPROM.get(30, BrewSetPoint);
-          EEPROM.get(40, brewtime);
-          EEPROM.get(50, preinfusion);
-          EEPROM.get(60, preinfusionpause);
-          EEPROM.get(90, aggbKp);
-          EEPROM.get(100, aggbTn);
-          EEPROM.get(110, aggbTv);
-          EEPROM.get(120, brewtimersoftware);
-          EEPROM.get(130, brewboarder);
         } 
       }
     }
@@ -2029,32 +1998,8 @@ void setup() {
   #endif
   setupDone = true;
 
-  #if defined(ESP8266) 
-    /********************************************************
-      Timer1 ISR - Initialisierung
-      TIM_DIV1 = 0,   //80MHz (80 ticks/us - 104857.588 us max)
-      TIM_DIV16 = 1,  //5MHz (5 ticks/us - 1677721.4 us max)
-      TIM_DIV256 = 3  //312.5Khz (1 tick = 3.2us - 26843542.4 us max)
-    ******************************************************/
-      timer1_isr_init();
-      timer1_attachInterrupt(onTimer1ISR);
-      //timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
-      //timer1_write(50000); // set interrupt time to 10ms
-      timer1_enable(TIM_DIV256, TIM_EDGE, TIM_SINGLE);
-      timer1_write(6250); // set interrupt time to 20ms
-  #endif
-  #if defined(ESP32) // ESP32
-        /********************************************************
-    Timer1 ISR - Initialisierung
-    TIM_DIV1 = 0,   //80MHz (80 ticks/us - 104857.588 us max)
-    TIM_DIV16 = 1,  //5MHz (5 ticks/us - 1677721.4 us max)
-    TIM_DIV256 = 3  //312.5Khz (1 tick = 3.2us - 26843542.4 us max)
-  ******************************************************/
-    timer = timerBegin(0, 80, true); //m
-    timerAttachInterrupt(timer, &onTimer, true);//m
-    timerAlarmWrite(timer, 10000, true);//m
-    timerAlarmEnable(timer);//m
-  #endif
+  initTimer1();
+  enableTimer1();
 }
 
 void loop() {
@@ -2075,7 +2020,7 @@ void loopcalibrate()
   {
     pidMode = 0;
     bPID.SetMode(pidMode);
-    Output = 0 ;false;
+    Output = 0;
   }
   if (Blynk.connected()) 
   {  // If connected run as normal
@@ -2121,33 +2066,17 @@ void looppid()
     // Disable interrupt it OTA is starting, otherwise it will not work
     ArduinoOTA.onStart([]() 
     {
-      
-      #if defined(ESP8266) 
-      timer1_disable();
-      #endif
-      #if defined(ESP32) 
-      timerAlarmDisable(timer);
-      #endif
+      disableTimer1();
       digitalWrite(pinRelayHeater, LOW); //Stop heating
     });
     ArduinoOTA.onError([](ota_error_t error) 
     {
-      #if defined(ESP8266) 
-      timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
-      #endif
-      #if defined(ESP32) 
-      timerAlarmEnable(timer);
-      #endif
+      enableTimer1();
     });
     // Enable interrupts if OTA is finished
     ArduinoOTA.onEnd([]() 
     {
-      #if defined(ESP8266) 
-       timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
-      #endif
-      #if defined(ESP32)
-        timerAlarmEnable(timer);
-      #endif
+      enableTimer1();
     });
 
     if (Blynk.connected()) 
@@ -2220,7 +2149,7 @@ void looppid()
         printScreen();  // refresh display
       }
   #endif
-  if (machinestate == 90 || machinestate == 100 || machinestate == 80) // Offline see machinestate.h
+  if (machinestate == kPidOffline || machinestate == kSensorError || machinestate == kEmergencyStop) // Offline see machinestate.h
   {
     if (pidMode == 1)
     { 
@@ -2241,7 +2170,7 @@ void looppid()
   }
 
   //Set PID if first start of machine detected, and no SteamON
-  if (machinestate == 0 || machinestate == 10 || machinestate == 19) // Cold Start states 
+  if (machinestate == kInit || machinestate == kColdStart || machinestate == kSetPointNegative) // Cold Start states 
   {
     if (startTn != 0) {
       startKi = startKp / startTn;
@@ -2256,7 +2185,7 @@ void looppid()
     bPID.SetTunings(startKp, startKi, 0, P_ON_M);
   // normal PID
   } 
-  if (machinestate == 20 ) 
+  if (machinestate == kPidNormal ) 
   {    //Prevent overwriting of brewdetection values
     // calc ki, kd
     if (aggTn != 0) {
@@ -2291,7 +2220,7 @@ void looppid()
     bPID.SetTunings(aggbKp, aggbKi, aggbKd, PonE) ;
   }
   // Steam on
-  if (machinestate == 40) // STEAM
+  if (machinestate == kSteam) // STEAM
   {
     // if (aggTn != 0) {
     //   aggKi = aggKp / aggTn ;
@@ -2308,7 +2237,7 @@ void looppid()
     bPID.SetTunings(150, 0, 0, PonE);
   }
 
-  if (machinestate == 45) // chill-mode after steam
+  if (machinestate == kCoolDown) // chill-mode after steam
   {
     switch (machine) {
       
@@ -2337,3 +2266,124 @@ void looppid()
   }  
   //sensor error OR Emergency Stop
 }
+
+
+/**************************************************************************//**
+ * \brief Reads all system parameter values from non-volatile storage.
+ * 
+ * \return  0 - succeed
+ *         <0 - failed
+ ******************************************************************************/
+int readSysParamsFromStorage(void) 
+{
+  int addr;
+  double dummy;
+
+  // check if any data are programmed...
+  // An erased (or never programmed) Flash memory is filled with 0xFF.
+  for (addr=0; addr<10; addr++)                                                 // check 1st 10 bytes...
+  {
+    if (EEPROM.read(addr) != 0xFF)                                              // programmed byte?
+      break;                                                                    // yes -> abort loop
+  }
+  if (addr >= 10)                                                               // all bytes "empty"?
+  {                                                                             // yes...
+    debugStream.writeI("%s(): no data found", __FUNCTION__);
+    return -1;
+  }
+  
+  // check first value, if there is a valid number...
+  EEPROM.get(0, dummy);
+  if (isnan(dummy))                                                             // invalid floating point number?
+  {                                                                             // yes...
+    debugStream.writeI("%s(): no NV data found (addr 0=%f)", __FUNCTION__, dummy);
+    return -2;
+  }
+  debugStream.writeI("%s(): data found", __FUNCTION__);
+
+  // read stored system parameter values...
+  EEPROM.get(0, aggKp);
+  EEPROM.get(10, aggTn);
+  EEPROM.get(20, aggTv);
+  EEPROM.get(30, BrewSetPoint);
+  EEPROM.get(40, brewtime);
+  EEPROM.get(50, preinfusion);
+  EEPROM.get(60, preinfusionpause);
+  EEPROM.get(90, aggbKp);
+  EEPROM.get(100, aggbTn);
+  EEPROM.get(110, aggbTv);
+  EEPROM.get(120, brewtimersoftware);
+  EEPROM.get(130, brewboarder);
+
+  // EEPROM.commit() not necessary after read
+  return 0;
+}
+
+
+
+/**************************************************************************//**
+ * \brief Writes all current system parameter values to non-volatile storage.
+ * 
+ * \return  0 - succeed
+ *         <0 - failed
+ ******************************************************************************/
+int writeSysParamsToStorage(void) 
+{
+  int returnCode;
+  bool isTimerEnabled;
+  
+  // write current system parameter values...
+  EEPROM.put(0, aggKp);
+  EEPROM.put(10, aggTn);
+  EEPROM.put(20, aggTv);  
+  EEPROM.put(30, BrewSetPoint);
+  EEPROM.put(40, brewtime);
+  EEPROM.put(50, preinfusion);
+  EEPROM.put(60, preinfusionpause);
+  EEPROM.put(90, aggbKp);
+  EEPROM.put(100, aggbTn);
+  EEPROM.put(110, aggbTv);
+  EEPROM.put(120, brewtimersoftware);
+  EEPROM.put(130, brewboarder);
+
+  // While Flash memory erase/write operations no other code must be executed from Flash!
+  // disable any ISRs...
+  isTimerEnabled = isTimer1Enabled();
+  disableTimer1();
+
+  // really write data to storage...
+  returnCode = EEPROM.commit()? 0: -1;
+
+  // recover any ISRs...
+  if (isTimerEnabled)                                                           // was timer enabled before?
+    enableTimer1();                                                             // yes -> re-enable timer
+    
+  return returnCode;
+}
+
+
+
+/**************************************************************************//**
+ * \brief Returns the firmware version.
+ * 
+ * \return firmware version string
+ ******************************************************************************/
+const char *getMachineName(enum MACHINE id)
+{
+  if (id >= sizeof(machineName)/sizeof(machineName[0]))                         // invalid machine ID?
+    return (const char*)F("?");                                                 // yes ->
+  
+  return machineName[id];
+}
+
+
+/**************************************************************************//**
+ * \brief Returns the firmware version.
+ * 
+ * \return firmware version string
+ ******************************************************************************/
+const char *getFwVersion(void)
+{
+  return sysVersion;
+}
+

@@ -1,6 +1,5 @@
 /********************************************************
-  Version 2.5 (20.05.2021) 
-  Last Change: PINPRESSURESENSOR
+  Version 2.9.4 (07.01.2022) 
   Values must be configured by the user
 ******************************************************/
 
@@ -11,12 +10,15 @@
 #ifndef _userConfig_H
 #define _userConfig_H  
 
+#define SYSVERSION '2.9.4 MASTER'
+
 // List of supported machines
 enum MACHINE {
-  RancilioSilvia,   // MACHINEID 0
-  RancilioSilviaE,  // MACHINEID 1
-  Gaggia,           // MACHINEID 2
-  QuickMill         // MACHINEID 3
+  // USED AS INDEX (see machineName[])!
+  RancilioSilvia = 0,   // MACHINEID 0
+  RancilioSilviaE,      // MACHINEID 1
+  Gaggia,               // MACHINEID 2
+  QuickMill             // MACHINEID 3
 };
 
 /********************************************************
@@ -54,7 +56,7 @@ enum MACHINE {
 #define ONLYPIDSCALE 0             // 0 = off , 1= OnlyPID with Scale
 #define BREWMODE 1                 // 1 = NORMAL preinfusion ; 2 = Scale with weight
 #define BREWDETECTION 1            // 0 = off, 1 = Software (Onlypid 1), 2 = Hardware (Onlypid 0), 3 = Sensor/Hardware for Only PID 
-#define BREWSWITCHTYPE 1              //  1 = normal Switch, 2 = Trigger Switch
+#define BREWSWITCHTYPE 1           //  1 = normal Switch, 2 = Trigger Switch
 #define COLDSTART_PID 1            // 1 = default coldstart values, 2 = custom values via blynk (expert mode activated) 
 #define TRIGGERTYPE HIGH           // LOW = low trigger, HIGH = high trigger relay // BREWDETECTION 3 configuration
 
@@ -118,6 +120,7 @@ enum MACHINE {
 // PID - offline values
 #define SETPOINT 95                // Temperatur setpoint
 #define STEAMSETPOINT 120          // Temperatur setpoint
+#define BREWDETECTIONLIMIT 150     // brew detection limit, be carefull: if too low, then there is the risk of wrong brew detection and rising temperature
 #define AGGKP 69                   // Kp normal
 #define AGGTN 399                  // Tn
 #define AGGTV 0                    // Tv
